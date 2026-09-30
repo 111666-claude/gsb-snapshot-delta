@@ -1,23 +1,31 @@
-// Package snapdelta 是快照差量同步：每拍只发变化的实体，丢包后发关键帧兜底。
-// 缺陷：发完差量不更新基线，删除也没人报，客户端请求关键帧更是没人理。
+// Package snapdelta 是快照差量同步：带宽预算内按优先级发差量、丢包后有界收敛、关键帧兜底。
+// 缺陷：基线只在第一拍建立、不发 Removed、关键帧请求没人理、每拍不限带宽、积压不维护。
 package snapdelta
 
 import "sort"
 
+// MaxPerTick 是每拍最多能发的实体数（带宽预算）。
+const MaxPerTick = 2
+
+// ConvergeTicks 是丢包后允许的收敛拍数。
+const ConvergeTicks = 3
+
 // Entity 是一个同步实体。
 type Entity struct {
-	ID string
-	X  float64
-	Y  float64
-	HP int
+	ID       string
+	X        float64
+	Y        float64
+	HP       int
+	Priority int // 越小越重要
 }
 
-// Delta 是一拍的差量。
+// Delta 是一拍的差量。Deferred 是本拍因带宽没发出去的积压条数。
 type Delta struct {
 	Tick     int64
 	Keyframe bool
 	Changed  []Entity
 	Removed  []string
+	Deferred int
 }
 
 // Empty 判断这一拍有没有内容要发。
@@ -44,7 +52,8 @@ func (e *Encoder) RequestKeyframe() {
 }
 
 // Encode 编出一拍的差量。
-// 缺陷：基线只在第一拍建立，之后永不更新；删除不进 Removed；关键帧请求被忽略。
+// 缺陷：基线只在第一拍建立、之后永不更新；删除不进 Removed；
+// 关键帧请求被忽略；每拍想发多少发多少，没有带宽预算也没有积压记账。
 func (e *Encoder) Encode(tick int64, current []Entity) Delta {
 	delta := Delta{Tick: tick}
 	if !e.haveBaseline {
@@ -52,6 +61,7 @@ func (e *Encoder) Encode(tick int64, current []Entity) Delta {
 		e.haveBaseline = true
 		delta.Keyframe = true
 		delta.Changed = append(delta.Changed, current...)
+		sortEntities(delta.Changed)
 		return delta
 	}
 	for _, entity := range current {
@@ -60,7 +70,7 @@ func (e *Encoder) Encode(tick int64, current []Entity) Delta {
 			delta.Changed = append(delta.Changed, entity)
 		}
 	}
-	sort.Slice(delta.Changed, func(i, j int) bool { return delta.Changed[i].ID < delta.Changed[j].ID })
+	sortEntities(delta.Changed)
 	return delta
 }
 
@@ -90,4 +100,13 @@ func index(entities []Entity) map[string]Entity {
 		indexed[entity.ID] = entity
 	}
 	return indexed
+}
+
+func sortEntities(entities []Entity) {
+	sort.Slice(entities, func(i, j int) bool {
+		if entities[i].Priority != entities[j].Priority {
+			return entities[i].Priority < entities[j].Priority
+		}
+		return entities[i].ID < entities[j].ID
+	})
 }

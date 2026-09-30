@@ -37,3 +37,9 @@ func TestApplyKeyframeReplacesState(t *testing.T) {
 		t.Fatalf("关键帧应该整体替换状态：%+v", next)
 	}
 }
+
+func TestConstants(t *testing.T) {
+	if MaxPerTick != 2 || ConvergeTicks != 3 {
+		t.Fatal("差量同步常量被改了")
+	}
+}
